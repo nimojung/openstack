@@ -1,0 +1,2558 @@
+1. Environment				
+	1.1 Security			
+		openssl rand -hex 10		
+	1.2 Host networking			
+		1.2.1 Controller node		
+			1.2.1.1 Configure network interfaces
+-------------------------------------------------------------------------------
+#ex : Management network
+IP address: 192.168.0.2
+Network mask: 255.255.255.0 (or /24)
+Default gateway: 192.168.0.1
+#ex : Physical network (옵션 확인)
+BOOTPROTO=none
+ONBOOT=yes
+PEERDNS=yes
+PEERROUTES=yes
+
+-------------------------------------------------------------------------------
+			1.2.1.2 Configure name resolution
+-------------------------------------------------------------------------------
+vi /etc/hosts
+192.168.0.2 controller
+192.168.0.3 compute1
+192.168.0.4 compute2
+192.168.0.5 compute3
+192.168.0.6 compute4
+-------------------------------------------------------------------------------
+		1.2.2 Compute node		
+			1.2.2.1 Configure network interfaces	
+-------------------------------------------------------------------------------
+#ex : Management network
+IP address: 192.168.0.3
+Network mask: 255.255.255.0 (or /24)
+Default gateway: 192.168.0.1
+-------------------------------------------------------------------------------
+			1.2.2.2 Configure name resolution	
+				Ref : 1.2.1.2
+		1.2.3 Block storage node (Optional)		
+			1.2.3.1 Configure network interfaces
+-------------------------------------------------------------------------------
+#ex : Management network
+IP address: 192.168.0.4
+Network mask: 255.255.255.0 (or /24)
+Default gateway: 192.168.0.1
+-------------------------------------------------------------------------------
+			1.2.3.2 Configure name resolution	
+				Ref : 1.2.1.2
+		1.2.4 Object storage nodes (Optional)		
+			1.2.4.1 Configure network interfaces	
+-------------------------------------------------------------------------------
+#ex : Management network
+IP address: 192.168.0.5
+Network mask: 255.255.255.0 (or /24)
+Default gateway: 192.168.0.1
+-------------------------------------------------------------------------------
+			1.2.4.2 Configure name resolution	
+				Ref : 1.2.1.2
+		1.2.5 Verify connectivity		
+			# Access SSH	
+-------------------------------------------------------------------------------
+mkdir .ssh
+chmod 700 .ssh
+ssh-keygen -t rsa -P '' -f .ssh/id_rsa
+ssh-copy-id -i ~/.ssh/id_rsa.pub controller
+ssh-copy-id -i ~/.ssh/id_rsa.pub compute1
+ssh-copy-id -i ~/.ssh/id_rsa.pub compute2
+ssh-copy-id -i ~/.ssh/id_rsa.pub compute3
+ssh-copy-id -i ~/.ssh/id_rsa.pub compute4
+-------------------------------------------------------------------------------
+			# Disable FireWall	
+-------------------------------------------------------------------------------
+systemctl stop firewalld
+systemctl disable firewalld
+-------------------------------------------------------------------------------
+			1.2.5.1 Verify connectivity(controller)	
+-------------------------------------------------------------------------------
+ping -c 4 openstack.org
+ping -c 4 compute1
+-------------------------------------------------------------------------------
+			1.2.5.2 Verify connectivity(compute1)	
+-------------------------------------------------------------------------------
+ping -c 4 openstack.org
+ping -c 4 controller
+-------------------------------------------------------------------------------
+	1.3 Network Time Protocol (NTP)			
+		1.3.1 Controller node		
+			1.3.1.1 Install and configure components	
+-------------------------------------------------------------------------------
+yum install -y chrony
+
+vi /etc/chrony.conf
+server time.bora.net iburst
+allow 192.168.0.0/24 
+
+systemctl enable chronyd.service
+systemctl start chronyd.service
+systemctl status chronyd.service
+-------------------------------------------------------------------------------
+		1.3.2 Other nodes		
+			1.3.2.1 Install and configure components	
+-------------------------------------------------------------------------------
+yum install -y chrony
+
+# comment out or remove all but one server key
+vi /etc/chrony.conf
+server controller iburst
+
+scp /etc/chrony.conf root@compute2:/etc/
+scp /etc/chrony.conf root@compute3:/etc/
+scp /etc/chrony.conf root@compute4:/etc/
+
+systemctl enable chronyd.service
+systemctl start chronyd.service
+
+# ntp활용(모든 노드)
+yum install -y ntp
+vi /etc/ntp.conf
+restrict 127.0.0.1 
+restrict -6 ::1
+restrict 192.168.56.0 mask 255.255.255.0 nomodify notrap
+server 127.127.1.0
+
+# crontab 등록
+crontab -e
+*/05 * * * * ntpdate controller
+
+# cinder server 들이 정상적으로 동작하지 않는 것은 시간동기화 문제가 대부분
+cinder-manage service list
+-------------------------------------------------------------------------------
+		1.3.3 Verify operation		
+-------------------------------------------------------------------------------
+# All node
+chronyc sources
+-------------------------------------------------------------------------------
+	1.4 OpenStack packages			
+		1.4.1 Prerequisites		
+-------------------------------------------------------------------------------
+# CentOS does not require the following steps.
+subscription-manager register --username="USERNAME" --password="PASSWORD"
+subscription-manager list --available
+subscription-manager attach --pool="POOLID"
+subscription-manager repos --enable=rhel-7-server-optional-rpms --enable=rhel-7-server-extras-rpms --enable=rhel-7-server-rh-common-rpms
+-------------------------------------------------------------------------------
+		1.4.2 Enable the OpenStack repository		
+-------------------------------------------------------------------------------
+yum install -y centos-release-openstack-mitaka
+yum install -y https://rdoproject.org/repos/rdo-release.rpm
+-------------------------------------------------------------------------------
+		1.4.3 Finalize the installation		
+-------------------------------------------------------------------------------
+yum upgrade -y
+# If the upgrade process includes a new kernel, reboot your host to activate it.
+reboot
+yum install -y python-openstackclient
+yum install -y openstack-selinux
+-------------------------------------------------------------------------------
+	1.5 SQL database			
+		1.5.1 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y mariadb mariadb-server python2-PyMySQL
+
+vi /etc/my.cnf.d/mariadb_openstack.cnf
+[mysqld]
+bind-address = 192.168.0.2
+default-storage-engine = innodb
+innodb_file_per_table
+collation-server = utf8_general_ci
+character-set-server = utf8
+max_connections = 2048
+-------------------------------------------------------------------------------
+		1.5.2 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable mariadb.service
+systemctl start mariadb.service
+systemctl status mariadb.service
+mysql_secure_installation
+# password : sniper123!@#
+-------------------------------------------------------------------------------
+	1.6 NoSQL database			
+		1.6.1 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y mongodb-server mongodb
+
+vi /etc/mongod.conf
+bind_ip = 192.168.0.2
+smallfiles = true
+-------------------------------------------------------------------------------
+		1.6.2 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable mongod.service
+systemctl start mongod.service
+systemctl status mongod.service
+-------------------------------------------------------------------------------
+	1.7 Message queue			
+		1.7.1 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y rabbitmq-server
+systemctl enable rabbitmq-server.service
+systemctl start rabbitmq-server.service
+systemctl status rabbitmq-server.service
+rabbitmqctl add_user openstack rabbitpass
+rabbitmqctl set_permissions openstack ".*" ".*" ".*"
+-------------------------------------------------------------------------------
+	1.8 Memcached			
+		1.8.1 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y memcached python-memcached
+-------------------------------------------------------------------------------
+		1.8.2 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable memcached.service
+systemctl start memcached.service
+systemctl status memcached.service
+-------------------------------------------------------------------------------
+2. Identity service				
+	2.1 Install and configure			
+		2.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+mysql -u root -p
+CREATE DATABASE keystone;
+GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'localhost' IDENTIFIED BY 'keystonedbpass';
+GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%' IDENTIFIED BY 'keystonedbpass';
+exit
+
+openssl rand -hex 10 # d64d0857c5c0e41c1b08 (admin_token)
+-------------------------------------------------------------------------------
+		2.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y openstack-keystone httpd mod_wsgi
+
+vi /etc/keystone/keystone.conf
+[DEFAULT]
+admin_token = d64d0857c5c0e41c1b08
+[database]
+connection = mysql://keystone:keystonedbpass@controller/keystone
+[token]
+provider = fernet
+
+su -s /bin/sh -c "keystone-manage db_sync" keystone
+keystone-manage fernet_setup --keystone-user keystone --keystone-group keystone
+-------------------------------------------------------------------------------
+		2.1.3 Configure the Apache HTTP server		
+-------------------------------------------------------------------------------
+vi /etc/httpd/conf/httpd.conf
+ServerName controller
+
+vi /etc/httpd/conf.d/wsgi-keystone.conf
+Listen 5000
+Listen 35357
+<VirtualHost *:5000>
+    WSGIDaemonProcess keystone-public processes=5 threads=1 user=keystone group=keystone display-name=%{GROUP}
+    WSGIProcessGroup keystone-public
+    WSGIScriptAlias / /usr/bin/keystone-wsgi-public
+    WSGIApplicationGroup %{GLOBAL}
+    WSGIPassAuthorization On
+    ErrorLogFormat "%{cu}t %M"
+    ErrorLog /var/log/httpd/keystone-error.log
+    CustomLog /var/log/httpd/keystone-access.log combined
+    <Directory /usr/bin>
+        Require all granted
+    </Directory>
+</VirtualHost>
+<VirtualHost *:35357>
+    WSGIDaemonProcess keystone-admin processes=5 threads=1 user=keystone group=keystone display-name=%{GROUP}
+    WSGIProcessGroup keystone-admin
+    WSGIScriptAlias / /usr/bin/keystone-wsgi-admin
+    WSGIApplicationGroup %{GLOBAL}
+    WSGIPassAuthorization On
+    ErrorLogFormat "%{cu}t %M"
+    ErrorLog /var/log/httpd/keystone-error.log
+    CustomLog /var/log/httpd/keystone-access.log combined
+    <Directory /usr/bin>
+        Require all granted
+    </Directory>
+</VirtualHost>
+-------------------------------------------------------------------------------
+		2.1.4 Finalize the installation		
+-------------------------------------------------------------------------------
+systemctl enable httpd.service
+systemctl start httpd.service
+systemctl status httpd.service
+-------------------------------------------------------------------------------
+	2.2 Create the service entity and API endpoints			
+		2.2.1 Prerequisites		
+-------------------------------------------------------------------------------
+export OS_TOKEN=d64d0857c5c0e41c1b08
+export OS_URL=http://controller:35357/v3
+export OS_IDENTITY_API_VERSION=3
+-------------------------------------------------------------------------------
+		2.2.2 Create the service entity and API endpoints		
+-------------------------------------------------------------------------------
+openstack service create --name keystone --description "OpenStack Identity" identity
+# Each service that you add to your OpenStack environment requires one or more service entities and three API endpoint variants in the Identity service.
+openstack endpoint create --region RegionOne identity public http://controller:5000/v3
+openstack endpoint create --region RegionOne identity internal http://controller:5000/v3
+openstack endpoint create --region RegionOne identity admin http://controller:5000/v3
+-------------------------------------------------------------------------------
+		2.2.3 Create a domain, projects, users, and roles		
+-------------------------------------------------------------------------------
+# You can repeat this procedure to create additional projects and users.
+openstack domain create --description "Default Domain" default
+openstack project create --domain default --description "Admin Project" admin
+openstack user create --domain default --password-prompt admin
+# User Password : sniper123!@#
+openstack role create admin
+openstack role add --project admin --user admin admin
+openstack project create --domain default --description "Service Project" service
+openstack project create --domain default --description "Demo Project" demo
+# Do not repeat this step when creating additional users for this project.
+openstack user create --domain default --password-prompt demo
+# User Password : sniper123!@#
+openstack role create user
+openstack role add --project demo --user demo user
+-------------------------------------------------------------------------------
+		2.2.4 Verify operation		
+-------------------------------------------------------------------------------
+# For security reasons, disable the temporary authentication token mechanism:
+vi /etc/keystone/keystone-paste.ini
+# remove admin_token_auth from the [pipeline:public_api], [pipeline:admin_api], and [pipeline:api_v3] sections
+
+unset OS_TOKEN OS_URL
+openstack --os-auth-url http://controller:35357/v3 --os-project-domain-name default --os-user-domain-name default --os-project-name admin --os-username admin token issue
+# Password : sniper123!@#
+openstack --os-auth-url http://controller:5000/v3 --os-project-domain-name default --os-user-domain-name default --os-project-name demo --os-username demo token issue
+# Password : sniper123!@#
+-------------------------------------------------------------------------------
+	2.3 Create OpenStack client environment scripts			
+		2.3.1 Creating the scripts		
+-------------------------------------------------------------------------------
+vi admin-openrc.sh 
+export OS_PROJECT_DOMAIN_NAME=default
+export OS_USER_DOMAIN_NAME=default
+export OS_PROJECT_NAME=admin
+export OS_USERNAME=admin
+export OS_PASSWORD=sniper123!@#
+export OS_AUTH_URL=http://controller:35357/v3
+export OS_IDENTITY_API_VERSION=3
+export OS_IMAGE_API_VERSION=2
+
+vi demo-openrc.sh
+export OS_PROJECT_DOMAIN_NAME=default
+export OS_USER_DOMAIN_NAME=default
+export OS_PROJECT_NAME=demo
+export OS_USERNAME=demo
+export OS_PASSWORD=sniper123!@#
+export OS_AUTH_URL=http://controller:5000/v3
+export OS_IDENTITY_API_VERSION=3
+export OS_IMAGE_API_VERSION=2
+-------------------------------------------------------------------------------
+		2.3.2 Using the scripts		
+-------------------------------------------------------------------------------
+. admin-openrc.sh
+# Request an authentication token:
+openstack token issue
+-------------------------------------------------------------------------------
+3. Image service				
+	3.1 Install and configure			
+		3.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+# To create the database, complete these steps:
+mysql -u root -p
+# Enter password : sniper123!@#
+CREATE DATABASE glance;
+GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'localhost' IDENTIFIED BY 'glancedbpass';
+GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'%' IDENTIFIED BY 'glancedbpass';
+exit
+
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# Create the glance user:
+openstack user create --domain default --password-prompt glance
+# User Password : glancepass
+# Add the admin role to the glance user and service project:
+openstack role add --project service --user glance admin
+# Create the glance service entity:
+openstack service create --name glance --description "OpenStack Image service" image
+# Create the Image service API endpoints:
+openstack endpoint create --region RegionOne image public http://controller:9292
+openstack endpoint create --region RegionOne image internal http://controller:9292
+openstack endpoint create --region RegionOne image admin http://controller:9292
+-------------------------------------------------------------------------------
+		3.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y openstack-glance
+
+vi /etc/glance/glance-api.conf
+[database]
+connection = mysql+pymysql://glance:glancedbpass@controller/glance
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = glance
+password = glancepass
+[paste_deploy]
+flavor = keystone
+[glance_store]
+stores = file,http
+default_store = file
+filesystem_store_datadir = /var/lib/glance/images/
+# /dev/sdb가 있으면 /openstack 공간을 만들고
+# mkdir /openstack/glance/images/로 해보자.
+#filesystem_store_datadir = /openstack/glance/images/
+#glance 이미지를 swift로 설정할 때
+#[glance_store]
+#stores = glance.store.swift.Store
+#default_store = swift
+#swift_store_auth_version = 2
+#swift_store_auth_address = http://controller:35357/v2.0/
+#swift_store_user = service:glance
+#swift_store_key = glancepass
+#swift_store_create_container_on_put = True
+#swift_store_large_object_size = 5120
+#swift_store_large_object_chunk_size = 200
+#swift_enable_snet = False
+
+
+vi /etc/glance/glance-registry.conf
+[database]
+connection = mysql+pymysql://glance:glancedbpass@controller/glance
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = glance
+password = glancepass
+#glance 이미지를 swift
+#[paste_deploy]
+#flavor = keystone로 설정할 때
+#[glance_store]
+#swift_store_auth_version = 2
+#swift_store_auth_address = http://controller:35357/v2.0/
+#swift_store_user = service:glance
+#swift_store_key = glance_pass
+#swift_store_container = glance
+#swift_store_create_container_on_put = True
+#swift_store_large_object_size = 5120
+#swift_store_large_object_chunk_size = 200
+#swift_enable_snet = False
+
+vi /etc/glance/glance-cache.conf
+#[glance_store]
+#swift_store_auth_version = 2
+#swift_store_auth_address = http://controller:35357/v2.0/
+#swift_store_user = service:glance
+#swift_store_key = glance_pass
+#swift_store_container = glance
+#swift_store_create_container_on_put = True
+#swift_store_large_object_size = 5120
+#swift_store_large_object_chunk_size = 200
+#swift_enable_snet = False
+
+# Populate the Image service database:
+su -s /bin/sh -c "glance-manage db_sync" glance
+-------------------------------------------------------------------------------
+		3.1.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-glance-api.service openstack-glance-registry.service
+systemctl start openstack-glance-api.service openstack-glance-registry.service
+systemctl status openstack-glance-api.service openstack-glance-registry.service
+-------------------------------------------------------------------------------
+	3.2 Verify operation			
+-------------------------------------------------------------------------------
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# Download the source image:
+yum install -y wget
+wget http://download.cirros-cloud.net/0.3.4/cirros-0.3.4-x86_64-disk.img
+
+# Upload the image to the Image service using the QCOW2 disk format, bare container format, and public visibility so all projects can access it:
+openstack image create "cirros" --file cirros-0.3.4-x86_64-disk.img --disk-format qcow2 --container-format bare --public
+openstack image list
+-------------------------------------------------------------------------------
+4. Compute service				
+	4.1 Install and configure controller node			
+		4.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+# To create the databases, complete these steps:
+mysql -u root -p
+# Enter password: sniper123!@#
+CREATE DATABASE nova_api;
+GRANT ALL PRIVILEGES ON nova_api.* TO 'nova'@'localhost' IDENTIFIED BY 'novadbpass';
+GRANT ALL PRIVILEGES ON nova_api.* TO 'nova'@'%' IDENTIFIED BY 'novadbpass';
+CREATE DATABASE nova;
+GRANT ALL PRIVILEGES ON nova.* TO 'nova'@'localhost' IDENTIFIED BY 'novadbpass';
+GRANT ALL PRIVILEGES ON nova.* TO 'nova'@'%' IDENTIFIED BY 'novadbpass';
+exit
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# Create the nova user:
+openstack user create --domain default --password-prompt nova
+# User Password : novapass
+# Add the admin role to the nova user:
+openstack role add --project service --user nova admin
+# Create the nova service entity:
+openstack service create --name nova --description "OpenStack Compute" compute
+# Create the Compute service API endpoints:
+openstack endpoint create --region RegionOne compute public http://controller:8774/v2.1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne compute internal http://controller:8774/v2.1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne compute admin http://controller:8774/v2.1/%\(tenant_id\)s
+-------------------------------------------------------------------------------
+		4.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+# Install the packages:
+yum install -y openstack-nova-api openstack-nova-conductor openstack-nova-console openstack-nova-novncproxy openstack-nova-scheduler
+
+vi /etc/nova/nova.conf
+[DEFAULT]
+enabled_apis = osapi_compute,metadata
+rpc_backend = rabbit
+auth_strategy = keystone
+my_ip=192.168.0.2
+use_neutron = True
+firewall_driver = nova.virt.firewall.NoopFirewallDriver
+[api_database]
+connection = mysql+pymysql://nova:novadbpass@controller/nova_api
+[database]
+connection = mysql+pymysql://nova:novadbpass@controller/nova
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+# Comment out or remove any other options in the [keystone_authtoken] section.
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = nova
+password = novapass
+[vnc]
+vncserver_listen = $my_ip
+vncserver_proxyclient_address = $my_ip
+[glance]
+api_servers = http://controller:9292
+[oslo_concurrency]
+lock_path = /var/lib/nova/tmp
+
+# Populate the Compute databases:
+su -s /bin/sh -c "nova-manage api_db sync" nova
+su -s /bin/sh -c "nova-manage db sync" nova
+-------------------------------------------------------------------------------
+		4.1.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-nova-api.service openstack-nova-consoleauth.service openstack-nova-scheduler.service openstack-nova-conductor.service openstack-nova-novncproxy.service
+systemctl start openstack-nova-api.service openstack-nova-consoleauth.service openstack-nova-scheduler.service openstack-nova-conductor.service openstack-nova-novncproxy.service
+systemctl status openstack-nova-api.service openstack-nova-consoleauth.service openstack-nova-scheduler.service openstack-nova-conductor.service openstack-nova-novncproxy.service
+-------------------------------------------------------------------------------
+	4.2 Install and configure a compute node			
+		4.2.1 Install and configure components		
+-------------------------------------------------------------------------------
+# Install the packages:
+yum install -y openstack-nova-compute
+
+vi /etc/nova/nova.conf
+[DEFAULT]
+rpc_backend=rabbit
+auth_strategy=keystone
+my_ip=192.168.0.3
+use_neutron=True
+firewall_driver=nova.virt.firewall.NoopFirewallDriver
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+# Comment out or remove any other options in the [keystone_authtoken] section.
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = nova
+password = novapass
+[vnc]
+enabled = True
+vncserver_listen = 0.0.0.0
+vncserver_proxyclient_address = $my_ip
+novncproxy_base_url = http://controller:6080/vnc_auto.html
+[glance]
+api_servers = http://controller:9292
+[oslo_concurrency]
+lock_path = /var/lib/nova/tmp
+
+# instance가 생성되지 않을 때(can not allocate network)
+[DEFAULT]
+vif_plugging_is_fatal: false
+vif_plugging_timeout: 0
+
+# 복사 후
+scp /etc/nova/nova.conf root@compute2:/etc/nova
+scp /etc/nova/nova.conf root@compute3:/etc/nova
+scp /etc/nova/nova.conf root@compute4:/etc/nova
+# my_ip 변경하기
+vi /etc/nova/nova.conf
+
+-------------------------------------------------------------------------------
+		4.2.2 Finalize installation		
+-------------------------------------------------------------------------------
+# Determine whether your compute node supports hardware acceleration for virtual machines:
+egrep -c '(vmx|svm)' /proc/cpuinfo
+# If this command returns a value of zero, your compute node does not support hardware acceleration and you must configure libvirt to use QEMU instead of KVM.
+vi /etc/nova/nova.conf
+[libvirt]
+virt_type = qemu
+
+systemctl enable libvirtd.service openstack-nova-compute.service
+systemctl start libvirtd.service openstack-nova-compute.service
+systemctl status libvirtd.service openstack-nova-compute.service
+-------------------------------------------------------------------------------
+	4.3 Verify operation			
+-------------------------------------------------------------------------------
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# List service components to verify successful launch and registration of each process:
+openstack compute service list
+-------------------------------------------------------------------------------
+5. Networking service				
+	5.1 Install and configure controller node			
+		5.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+# To create the database, complete these steps:
+mysql -u root -p
+# Enter password: sniper123!@#
+CREATE DATABASE neutron;
+GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'localhost' IDENTIFIED BY 'neutrondbpass';
+GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'%' IDENTIFIED BY 'neutrondbpass';
+exit
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# To create the service credentials, complete these steps:
+openstack user create --domain default --password-prompt neutron
+# User Password: neutronpass
+# Add the admin role to the neutron user:
+openstack role add --project service --user neutron admin
+# Create the neutron service entity:
+openstack service create --name neutron --description "OpenStack Networking" network
+# Create the Networking service API endpoints:
+openstack endpoint create --region RegionOne network public http://controller:9696
+openstack endpoint create --region RegionOne network internal http://controller:9696
+openstack endpoint create --region RegionOne network admin http://controller:9696
+-------------------------------------------------------------------------------
+		5.1.2 Configure networking options		
+			5.1.2.1 Networking Option 1: Provider networks	
+				5.1.2.1.1 Install the components
+-------------------------------------------------------------------------------
+# Install and configure the Networking components on the controller node.
+yum install -y openstack-neutron openstack-neutron-ml2 openstack-neutron-linuxbridge ebtables
+-------------------------------------------------------------------------------
+				5.1.2.1.2 Configure the server component
+-------------------------------------------------------------------------------
+vi /etc/neutron/neutron.conf
+[DEFAULT]
+core_plugin = ml2
+service_plugins =
+rpc_backend = rabbit
+auth_strategy = keystone
+notify_nova_on_port_status_changes = True
+notify_nova_on_port_data_changes = True
+[database]
+connection = mysql+pymysql://neutron:neutrondbpass@controller/neutron
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+# Comment out or remove any other options in the [keystone_authtoken] section.
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = neutronpass
+[nova]
+auth_url = http://controller:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = nova
+password = novapass
+[oslo_concurrency]
+lock_path = /var/lib/neutron/tmp
+-------------------------------------------------------------------------------
+				5.1.2.1.3 Configure the Modular Layer 2 (ML2) plug-in
+-------------------------------------------------------------------------------
+vi /etc/neutron/plugins/ml2/ml2_conf.ini
+[ml2]
+# After you configure the ML2 plug-in, removing values in the type_drivers option can lead to database inconsistency.
+type_drivers = flat,vlan
+tenant_network_types =
+mechanism_drivers = linuxbridge
+extension_drivers = port_security
+[ml2_type_flat]
+flat_networks = provider
+[securitygroup]
+enable_ipset = True
+-------------------------------------------------------------------------------
+				5.1.2.1.4 Configure the Linux bridge agent
+-------------------------------------------------------------------------------
+vi /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+[linux_bridge]
+physical_interface_mappings = provider:eno2
+[vxlan]
+enable_vxlan = False
+[securitygroup]
+enable_security_group = True
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+-------------------------------------------------------------------------------
+				5.1.2.1.5 Configure the DHCP agent
+-------------------------------------------------------------------------------
+vi /etc/neutron/dhcp_agent.ini
+[DEFAULT]
+interface_driver = neutron.agent.linux.interface.BridgeInterfaceDriver
+dhcp_driver = neutron.agent.linux.dhcp.Dnsmasq
+enable_isolated_metadata = True
+-------------------------------------------------------------------------------
+			5.1.2.2 Networking Option 2: Self-service networks	
+				5.1.2.2.1 Install the components
+-------------------------------------------------------------------------------
+# Install and configure the Networking components on the controller node.
+yum install -y openstack-neutron openstack-neutron-ml2 openstack-neutron-linuxbridge ebtables
+-------------------------------------------------------------------------------
+				5.1.2.2.2 Configure the server component
+-------------------------------------------------------------------------------
+vi /etc/neutron/neutron.conf
+[database]
+connection = mysql+pymysql://neutron:neutrondbpass@controller/neutron
+[DEFAULT]
+core_plugin = ml2
+service_plugins = router
+allow_overlapping_ips = True
+rpc_backend = rabbit
+auth_strategy = keystone
+notify_nova_on_port_status_changes = True
+notify_nova_on_port_data_changes = True
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+# Comment out or remove any other options in the [keystone_authtoken] section.
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = neutronpass
+[nova]
+auth_url = http://controller:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = nova
+password = novapass
+[oslo_concurrency]
+lock_path = /var/lib/neutron/tmp
+-------------------------------------------------------------------------------
+				5.1.2.2.3 Configure the Modular Layer 2 (ML2) plug-in
+-------------------------------------------------------------------------------
+vi /etc/neutron/plugins/ml2/ml2_conf.ini
+[ml2]
+# After you configure the ML2 plug-in, removing values in the type_drivers option can lead to database inconsistency.
+type_drivers = flat,vlan,vxlan
+tenant_network_types = vxlan
+mechanism_drivers = linuxbridge,l2population
+extension_drivers = port_security
+[ml2_type_flat]
+flat_networks = provider
+[ml2_type_vxlan]
+vni_ranges = 1:1000
+[securitygroup]
+enable_ipset = True
+-------------------------------------------------------------------------------
+				5.1.2.2.4 Configure the Linux bridge agent
+-------------------------------------------------------------------------------
+vi /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+[linux_bridge]
+# PROVIDER_INTERFACE_NAME : eno2
+physical_interface_mappings = provider:eno2
+[vxlan]
+enable_vxlan = True
+local_ip = 192.168.0.2
+l2_population = True
+[securitygroup]
+enable_security_group = True
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+-------------------------------------------------------------------------------
+				5.1.2.2.5 Configure the layer-3 agent
+-------------------------------------------------------------------------------
+vi /etc/neutron/l3_agent.ini
+[DEFAULT]
+interface_driver = neutron.agent.linux.interface.BridgeInterfaceDriver
+external_network_bridge =
+-------------------------------------------------------------------------------
+				5.1.2.2.6 Configure the DHCP agent
+-------------------------------------------------------------------------------
+vi /etc/neutron/dhcp_agent.ini
+[DEFAULT]
+interface_driver = neutron.agent.linux.interface.BridgeInterfaceDriver
+dhcp_driver = neutron.agent.linux.dhcp.Dnsmasq
+enable_isolated_metadata = True
+-------------------------------------------------------------------------------
+		5.1.3 Configure the metadata agent		
+-------------------------------------------------------------------------------
+vi /etc/neutron/metadata_agent.ini
+[DEFAULT]
+nova_metadata_ip = controller
+# Replace METADATA_SECRET with a suitable secret for the metadata proxy.
+# METADATA_SECRET : metadatasecret
+metadata_proxy_shared_secret = metadatasecret
+-------------------------------------------------------------------------------
+		5.1.4 Configure Compute to use Networking		
+-------------------------------------------------------------------------------
+vi /etc/nova/nova.conf
+[neutron]
+url = http://controller:9696
+auth_url = http://controller:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = neutron
+password = neutronpass
+service_metadata_proxy = True
+# Replace METADATA_SECRET with a suitable secret for the metadata proxy.
+# METADATA_SECRET : metadatasecret
+metadata_proxy_shared_secret = metadatasecret
+-------------------------------------------------------------------------------
+		5.1.5 Finalize installation		
+-------------------------------------------------------------------------------
+# The Networking service initialization scripts expect a symbolic link /etc/neutron/plugin.ini pointing to the ML2 plug-in configuration file, /etc/neutron/plugins/ml2/ml2_conf.ini. If this symbolic link does not exist, create it using the following command:
+ln -s /etc/neutron/plugins/ml2/ml2_conf.ini /etc/neutron/plugin.ini
+# Populate the database:
+su -s /bin/sh -c "neutron-db-manage --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/ml2/ml2_conf.ini upgrade head" neutron
+# Restart the Compute API service:
+systemctl restart openstack-nova-api.service
+systemctl status openstack-nova-api.service
+# For both networking options:
+systemctl enable neutron-server.service neutron-linuxbridge-agent.service neutron-dhcp-agent.service neutron-metadata-agent.service
+systemctl start neutron-server.service neutron-linuxbridge-agent.service neutron-dhcp-agent.service neutron-metadata-agent.service
+systemctl status neutron-server.service neutron-linuxbridge-agent.service neutron-dhcp-agent.service neutron-metadata-agent.service
+# For networking option 2, also enable and start the layer-3 service:
+systemctl enable neutron-l3-agent.service
+systemctl start neutron-l3-agent.service
+systemctl status neutron-l3-agent.service
+-------------------------------------------------------------------------------
+	5.2 Install and configure compute node			
+		5.2.1 Install the components		
+-------------------------------------------------------------------------------
+yum install -y openstack-neutron-linuxbridge ebtables ipset
+-------------------------------------------------------------------------------
+		5.2.2 Configure the common component		
+-------------------------------------------------------------------------------
+vi /etc/neutron/neutron.conf
+[DEFAULT]
+rpc_backend = rabbit
+auth_strategy = keystone
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+# Comment out or remove any other options in the [keystone_authtoken] section.
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = neutronpass
+[oslo_concurrency]
+lock_path = /var/lib/neutron/tmp
+
+# 복사하고
+scp /etc/neutron/neutron.conf root@compute2:/etc/neutron/
+scp /etc/neutron/neutron.conf root@compute3:/etc/neutron/
+scp /etc/neutron/neutron.conf root@compute4:/etc/neutron/
+-------------------------------------------------------------------------------
+		5.2.3 Configure networking options		
+			5.2.3.1 Networking Option 1: Provider networks	
+				5.2.3.1.1 Configure the Linux bridge agent
+-------------------------------------------------------------------------------
+vi /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+[linux_bridge]
+# PROVIDER_INTERFACE_NAME : eno2
+physical_interface_mappings = provider:eno2
+[vxlan]
+enable_vxlan = False
+[securitygroup]
+enable_security_group = True
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+-------------------------------------------------------------------------------
+			5.2.3.2 Networking Option 2: Self-service networks	
+				5.2.3.2.1 Configure the Linux bridge agen
+-------------------------------------------------------------------------------
+vi /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+[linux_bridge]
+# PROVIDER_INTERFACE_NAME : eno2
+physical_interface_mappings = provider:eno2
+[vxlan]
+enable_vxlan = True
+# Replace OVERLAY_INTERFACE_IP_ADDRESS with the IP address of the underlying physical network interface that handles overlay networks. 
+# Therefore, replace OVERLAY_INTERFACE_IP_ADDRESS with the management IP address of the compute node
+local_ip = 192.168.0.3
+l2_population = True
+[securitygroup]
+enable_security_group = True
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+
+# 복사하고
+scp /etc/neutron/plugins/ml2/linuxbridge_agent.ini root@compute2:/etc/neutron/plugins/ml2/
+scp /etc/neutron/plugins/ml2/linuxbridge_agent.ini root@compute3:/etc/neutron/plugins/ml2/
+scp /etc/neutron/plugins/ml2/linuxbridge_agent.ini root@compute4:/etc/neutron/plugins/ml2/
+# vi /etc/neutron/plugins/ml2/linuxbridge_agent.ini local_ip 변경
+
+-------------------------------------------------------------------------------
+		5.2.4 Configure Compute to use Networking		
+-------------------------------------------------------------------------------
+vi /etc/nova/nova.conf 
+[neutron]
+url = http://controller:9696
+auth_url = http://controller:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = neutron
+password = neutronpass
+-------------------------------------------------------------------------------
+		5.2.5 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl restart openstack-nova-compute.service
+systemctl status openstack-nova-compute.service
+systemctl enable neutron-linuxbridge-agent.service
+systemctl start neutron-linuxbridge-agent.service
+systemctl status neutron-linuxbridge-agent.service
+-------------------------------------------------------------------------------
+	5.3 Verify operation			
+-------------------------------------------------------------------------------
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# List loaded extensions to verify successful launch of the neutron-server process:
+neutron ext-list
+-------------------------------------------------------------------------------
+		5.3.1 Networking Option 1: Provider networks		
+-------------------------------------------------------------------------------
+neutron agent-list
+# The output should indicate three agents on the controller node and one agent on each compute node.
+-------------------------------------------------------------------------------
+		5.3.2 Networking Option 2: Self-service networks		
+-------------------------------------------------------------------------------
+neutron agent-list
+# The output should indicate four agents on the controller node and one agent on each compute node.
+-------------------------------------------------------------------------------
+6. Dashboard				
+	6.1 Install and configure			
+		6.1.1 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y openstack-dashboard
+
+vi /etc/openstack-dashboard/local_settings
+ALLOWED_HOSTS = ['*']
+OPENSTACK_HOST = "controller"
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+CACHES = {
+    'default': {
+         'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
+         'LOCATION': 'controller:11211',
+    }
+}
+OPENSTACK_KEYSTONE_URL = "http://%s:5000/v3" % OPENSTACK_HOST # v2.0 원래값
+OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
+OPENSTACK_API_VERSIONS = {
+    "identity": 3,
+    "image": 2,
+    "volume": 2,
+}
+OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "default"
+OPENSTACK_KEYSTONE_DEFAULT_ROLE = "user"
+OPENSTACK_NEUTRON_NETWORK = {
+    'enable_router': True,
+    'enable_quotas': True,
+    'enable_distributed_router': False,
+    'enable_ha_router': False,
+    'enable_lb': True,
+    'enable_firewall': True,
+    'enable_vpn': True,
+    'enable_fip_topology_check': True,
+}
+TIME_ZONE = "Asia/Seoul"
+-------------------------------------------------------------------------------
+		6.1.2 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl restart httpd.service memcached.service
+systemctl status httpd.service memcached.service
+# The systemctl restart command starts each service if not currently running.
+-------------------------------------------------------------------------------
+	6.2 Verify operation			
+				# Access the dashboard using a web browser at http://controller/dashboard.
+7. Block Storage service				
+	7.1 Install and configure controller node			
+		7.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+# To create the database, complete these steps:
+mysql -u root -p
+CREATE DATABASE cinder;
+GRANT ALL PRIVILEGES ON cinder.* TO 'cinder'@'localhost' IDENTIFIED BY 'cinderdbpass';
+GRANT ALL PRIVILEGES ON cinder.* TO 'cinder'@'%' IDENTIFIED BY 'cinderdbpass';
+exit
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# To create the service credentials, complete these steps:
+openstack user create --domain default --password-prompt cinder
+# User Password: cinderpass
+# Add the admin role to the cinder user:
+openstack role add --project service --user cinder admin
+# Create the cinder and cinderv2 service entities:
+openstack service create --name cinder --description "OpenStack Block Storage" volume
+openstack service create --name cinderv2 --description "OpenStack Block Storage" volumev2
+# The Block Storage services require two service entities.
+# Create the Block Storage service API endpoints:
+openstack endpoint create --region RegionOne volume public http://controller:8776/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne volume internal http://controller:8776/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne volume admin http://controller:8776/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne volumev2 public http://controller:8776/v2/%\(tenant_id\)s
+openstack endpoint create --region RegionOne volumev2 internal http://controller:8776/v2/%\(tenant_id\)s
+openstack endpoint create --region RegionOne volumev2 admin http://controller:8776/v2/%\(tenant_id\)s
+# The Block Storage services require endpoints for each service entity."
+-------------------------------------------------------------------------------
+		7.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y openstack-cinder
+
+vi /etc/cinder/cinder.conf
+[database]
+connection = mysql+pymysql://cinder:cinderdbpass@controller/cinder
+[DEFAULT]
+rpc_backend = rabbit
+auth_strategy = keystone
+my_ip = 192.168.0.2
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+# Comment out or remove any other options in the [keystone_authtoken] section.
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = cinder
+password = cinderpass
+[oslo_concurrency]
+lock_path = /var/lib/cinder/tmp
+
+# Populate the Block Storage database:
+su -s /bin/sh -c "cinder-manage db sync" cinder
+-------------------------------------------------------------------------------
+		7.1.3 Configure Compute to use Block Storage		
+-------------------------------------------------------------------------------
+vi /etc/nova/nova.conf
+[cinder]
+os_region_name = RegionOne
+-------------------------------------------------------------------------------
+		7.1.4 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl restart openstack-nova-api.service
+systemctl status openstack-nova-api.service
+systemctl enable openstack-cinder-api.service openstack-cinder-scheduler.service
+systemctl start openstack-cinder-api.service openstack-cinder-scheduler.service
+systemctl status openstack-cinder-api.service openstack-cinder-scheduler.service
+-------------------------------------------------------------------------------
+	7.2 Install and configure a storage node			
+		7.2.1 Prerequisites		
+-------------------------------------------------------------------------------
+# Install the supporting utility packages:
+yum install -y lvm2
+systemctl enable lvm2-lvmetad.service
+systemctl start lvm2-lvmetad.service
+systemctl status lvm2-lvmetad.service
+# Create the LVM physical volume /dev/sdb:
+pvcreate -ff /dev/sdb
+# Create the LVM volume group cinder-volumes:
+vgcreate cinder-volumes /dev/sdb
+
+vi /etc/lvm/lvm.conf
+devices {
+filter = [ "a/sdb/", "r/.*/"]
+
+# If your storage nodes use LVM on the operating system disk, you must also add the associated device to the filter. For example, if the /dev/sda device contains the operating system:
+filter = [ "a/sda/", "a/sdb/", "r/.*/"]
+# Similarly, if your compute nodes use LVM on the operating system disk, you must also modify the filter in the /etc/lvm/lvm.conf file on those nodes to include only the operating system disk. For example, if the /dev/sda device contains the operating system:
+filter = [ "a/sda/", "r/.*/"]
+-------------------------------------------------------------------------------
+		7.2.2 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y openstack-cinder targetcli python-keystone python-keystoneclient
+
+vi /etc/cinder/cinder.conf
+[database]
+connection = mysql+pymysql://cinder:cinderdbpass@controller/cinder
+[DEFAULT]
+rpc_backend = rabbit
+auth_strategy = keystone
+# Replace MANAGEMENT_INTERFACE_IP_ADDRESS with the IP address of the management network interface on your storage node, typically 10.0.0.41 for the first node in the example architecture.
+my_ip = 192.168.0.3
+enabled_backends = lvm
+glance_api_servers = http://controller:9292
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+# Comment out or remove any other options in the [keystone_authtoken] section.
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = cinder
+password = cinderpass
+[lvm]
+volume_driver = cinder.volume.drivers.lvm.LVMVolumeDriver
+volume_group = cinder-volumes
+iscsi_protocol = iscsi
+iscsi_helper = lioadm
+[oslo_concurrency]
+lock_path = /var/lib/cinder/tmp
+
+# 복사하고
+scp /etc/cinder/cinder.conf root@compute2:/etc/cinder/
+scp /etc/cinder/cinder.conf root@compute3:/etc/cinder/
+scp /etc/cinder/cinder.conf root@compute4:/etc/cinder/
+# vi /etc/cinder/cinder.conf my_ip 변경
+
+-------------------------------------------------------------------------------
+		7.2.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-cinder-volume.service target.service
+systemctl start openstack-cinder-volume.service target.service
+systemctl status openstack-cinder-volume.service target.service
+-------------------------------------------------------------------------------
+	7.3 Verify operation			
+-------------------------------------------------------------------------------
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# List service components to verify successful launch of each process:
+cinder service-list
+-------------------------------------------------------------------------------
+8. Shared File Systems service				
+	8.1 Install and configure controller node			
+		8.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+# To create the database, complete these steps:
+mysql -u root -p
+CREATE DATABASE manila;
+GRANT ALL PRIVILEGES ON manila.* TO 'manila'@'localhost' IDENTIFIED BY 'maniladbpass';
+GRANT ALL PRIVILEGES ON manila.* TO 'manila'@'%' IDENTIFIED BY 'maniladbpass';
+exit
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# To create the service credentials, complete these steps:
+openstack user create --domain default --password-prompt manila
+# User Password: manilapass
+# Add the admin role to the manila user:
+openstack role add --project service --user manila admin
+# Create the manila and manilav2 service entities:
+openstack service create --name manila --description "OpenStack Shared File Systems" share
+openstack service create --name manilav2 --description "OpenStack Shared File Systems" sharev2
+# The Share File System services require two service entities.
+# Create the Shared File Systems service API endpoints:
+openstack endpoint create --region RegionOne share public http://controller:8786/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne share internal http://controller:8786/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne share admin http://controller:8786/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne sharev2 public http://controller:8786/v2/%\(tenant_id\)s
+openstack endpoint create --region RegionOne sharev2 internal http://controller:8786/v2/%\(tenant_id\)s
+openstack endpoint create --region RegionOne sharev2 admin http://controller:8786/v2/%\(tenant_id\)s
+# The Share File System services require endpoints for each service entity.
+-------------------------------------------------------------------------------
+		8.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y openstack-manila python-manilaclient
+
+vi /etc/manila/manila.conf
+[database]
+connection = mysql+pymysql://manila:maniladbpass@controller/manila
+[DEFAULT]
+rpc_backend = rabbit
+default_share_type = default_share_type
+rootwrap_config = /etc/manila/rootwrap.conf
+auth_strategy = keystone
+my_ip = 192.168.0.2
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+[keystone_authtoken]
+memcached_servers = controller:11211
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = manila
+password = manilapass
+[oslo_concurrency]
+lock_path = /var/lib/manila/tmp
+
+# Populate the Share File System database:
+su -s /bin/sh -c "manila-manage db sync" manila
+-------------------------------------------------------------------------------
+		8.1.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-manila-api.service openstack-manila-scheduler.service
+systemctl start openstack-manila-api.service openstack-manila-scheduler.service
+systemctl status openstack-manila-api.service openstack-manila-scheduler.service
+-------------------------------------------------------------------------------
+	8.2 Install and configure a share node			
+		8.2.1 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y openstack-manila-share python2-PyMySQL
+
+vi /etc/manila/manila.conf
+[database]
+connection = mysql+pymysql://manila:maniladbpass@controller/manila
+[DEFAULT]
+rpc_backend = rabbit
+default_share_type = default_share_type
+rootwrap_config = /etc/manila/rootwrap.conf
+auth_strategy = keystone
+my_ip = 192.168.0.201
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+[keystone_authtoken]
+memcached_servers = controller:11211
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = manila
+password = manilapass
+[oslo_concurrency]
+lock_path = /var/lib/manila/tmp
+-------------------------------------------------------------------------------
+		8.2.2 Configure share server management support options		
+			8.2.2.1 Shared File Systems Option 1: No driver support for share servers management	
+				8.2.2.1.1 Prerequisites
+-------------------------------------------------------------------------------
+# Install the supporting utility packages:
+yum install -y lvm2 nfs-utils nfs4-acl-tools portmap
+systemctl enable lvm2-lvmetad.service
+systemctl start lvm2-lvmetad.service
+# Create the LVM physical volume /dev/sdc:
+pvcreate /dev/sdc
+# Create the LVM volume group manila-volumes:
+vgcreate manila-volumes /dev/sdc
+
+vi /etc/lvm/lvm.conf
+devices {
+filter = [ "a/sdb/", "a/sdc", "r/.*/"]
+
+# If your storage nodes use LVM on the operating system disk, you must also add the associated device to the filter. For example, if the /dev/sda device contains the operating system:
+filter = [ "a/sda/", "a/sdb/", "a/sdc", "r/.*/"]
+# Similarly, if your compute nodes use LVM on the operating system disk, you must also modify the filter in the /etc/lvm/lvm.conf file on those nodes to include only the operating system disk. For example, if the /dev/sda device contains the operating system:
+filter = [ "a/sda/", "r/.*/"]
+-------------------------------------------------------------------------------
+				8.2.2.1.2 Configure components
+-------------------------------------------------------------------------------
+vi /etc/manila/manila.conf
+[DEFAULT]
+enabled_share_backends = lvm
+enabled_share_protocols = NFS,CIFS
+[lvm]
+share_backend_name = LVM
+share_driver = manila.share.drivers.lvm.LVMShareDriver
+driver_handles_share_servers = False
+lvm_share_volume_group = manila-volumes
+lvm_share_export_ip = 192.168.0.201
+-------------------------------------------------------------------------------
+			8.2.2.2 Shared File Systems Option 2: Driver support for share servers management	
+				8.2.2.2.1 Prerequisites
+-------------------------------------------------------------------------------
+yum install -y openstack-neutron openstack-neutron-linuxbridge ebtables
+-------------------------------------------------------------------------------
+				8.2.2.2.2 Configure components
+-------------------------------------------------------------------------------
+vi /etc/manila/manila.conf
+[DEFAULT]
+enabled_share_backends = generic
+enabled_share_protocols = NFS,CIFS
+[neutron]
+url = http://controller:9696
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = neutron
+password = neutronpass
+[nova]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = nova
+password = novapass
+[cinder]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = cinder
+password = cinderpass
+[generic]
+share_backend_name = GENERIC
+share_driver = manila.share.drivers.generic.GenericShareDriver
+driver_handles_share_servers = True
+service_instance_flavor_id = 100
+service_image_name = manila-service-image
+service_instance_user = manila
+service_instance_password = manila
+interface_driver = manila.network.linux.interface.BridgeInterfaceDriver
+-------------------------------------------------------------------------------
+		8.2.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-manila-share.service
+systemctl start openstack-manila-share.service
+systemctl status openstack-manila-share.service
+-------------------------------------------------------------------------------
+	8.3 Verify operation			
+-------------------------------------------------------------------------------
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# For deployments using option 1:
+manila service-list
+# For deployments using option 2:
+manila service-list
+-------------------------------------------------------------------------------
+9. Object Storage service				
+	9.1 Install and configure the controller node			
+		9.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+# The Object Storage service does not use an SQL database on the controller node. Instead, it uses distributed SQLite databases on each storage node.
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# To create the Identity service credentials, complete these steps:
+openstack user create --domain default --password-prompt swift
+# User Password: swiftpass
+# Add the admin role to the swift user:
+openstack role add --project service --user swift admin
+# Create the swift service entity:
+openstack service create --name swift --description "OpenStack Object Storage" object-store
+# Create the Object Storage service API endpoints:
+openstack endpoint create --region RegionOne object-store public http://controller:8080/v1/AUTH_%\(tenant_id\)s
+openstack endpoint create --region RegionOne object-store internal http://controller:8080/v1/AUTH_%\(tenant_id\)s
+openstack endpoint create --region RegionOne object-store admin http://controller:8080/v1
+-------------------------------------------------------------------------------
+		9.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+# Install the packages:
+yum install -y openstack-swift-proxy python-swiftclient python-keystoneclient python-keystonemiddleware memcached
+# Obtain the proxy service configuration file from the Object Storage source repository:
+curl -o /etc/swift/proxy-server.conf https://git.openstack.org/cgit/openstack/swift/plain/etc/proxy-server.conf-sample?h=stable/mitaka
+
+vi /etc/swift/proxy-server.conf
+[DEFAULT]
+bind_port = 8080
+user = swift
+swift_dir = /etc/swift
+[pipeline:main]
+# Do not change the order of the modules.
+pipeline = catch_errors gatekeeper healthcheck proxy-logging cache container_sync bulk ratelimit authtoken keystoneauth container-quotas account-quotas slo dlo versioned_writes proxy-logging proxy-server
+[app:proxy-server]
+use = egg:swift#proxy
+account_autocreate = True
+[filter:keystoneauth]
+use = egg:swift#keystoneauth
+operator_roles = admin,user
+# Comment out or remove any other options in the [filter:authtoken] section.
+[filter:authtoken]
+paste.filter_factory = keystonemiddleware.auth_token:filter_factory
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = swift
+password = swiftpass
+delay_auth_decision = True
+[filter:cache]
+use = egg:swift#memcache
+memcache_servers = controller:11211
+-------------------------------------------------------------------------------
+	9.2 Install and configure the storage nodes			
+		9.2.1 Prerequisites		
+-------------------------------------------------------------------------------
+# Perform these steps on each storage node.
+# Install the supporting utility packages:
+yum install -y xfsprogs rsync
+# Format the /dev/sdb and /dev/sdc devices as XFS:
+mkfs.xfs -f /dev/sdb
+mkfs.xfs -f /dev/sdc
+# Create the mount point directory structure:
+mkdir -p /srv/node/sdb
+mkdir -p /srv/node/sdc
+# Edit the /etc/fstab file and add the following to it:
+vi /etc/fstab
+/dev/sdb /srv/node/sdb xfs noatime,nodiratime,nobarrier,logbufs=8 0 2
+/dev/sdc /srv/node/sdc xfs noatime,nodiratime,nobarrier,logbufs=8 0 2
+# Mount the devices:
+mount /srv/node/sdb
+mount /srv/node/sdc
+# Create or edit the /etc/rsyncd.conf file to contain the following:
+vi /etc/rsyncd.conf
+uid = swift
+gid = swift
+log file = /var/log/rsyncd.log
+pid file = /var/run/rsyncd.pid
+address = 192.168.0.201
+[account]
+max connections = 2
+path = /srv/node/
+read only = False
+lock file = /var/lock/account.lock
+[container]
+max connections = 2
+path = /srv/node/
+read only = False
+lock file = /var/lock/container.lock
+[object]
+max connections = 2
+path = /srv/node/
+read only = False
+lock file = /var/lock/object.lock
+
+systemctl enable rsyncd.service
+systemctl start rsyncd.service
+systemctl status rsyncd.service
+-------------------------------------------------------------------------------
+		9.2.2 Install and configure components		
+-------------------------------------------------------------------------------
+# Perform these steps on each storage node.
+# Install the packages:
+yum install -y openstack-swift-account openstack-swift-container openstack-swift-object
+# Obtain the accounting, container, and object service configuration files from the Object Storage source repository:
+curl -o /etc/swift/account-server.conf https://git.openstack.org/cgit/openstack/swift/plain/etc/account-server.conf-sample?h=stable/mitaka
+curl -o /etc/swift/container-server.conf https://git.openstack.org/cgit/openstack/swift/plain/etc/container-server.conf-sample?h=stable/mitaka
+curl -o /etc/swift/object-server.conf https://git.openstack.org/cgit/openstack/swift/plain/etc/object-server.conf-sample?h=stable/mitaka
+
+vi /etc/swift/account-server.conf
+[DEFAULT]
+bind_ip = 192.168.0.201
+bind_port = 6002
+user = swift
+swift_dir = /etc/swift
+devices = /srv/node
+mount_check = True
+[pipeline:main]
+pipeline = healthcheck recon account-server
+[filter:recon]
+use = egg:swift#recon
+recon_cache_path = /var/cache/swift
+
+vi /etc/swift/container-server.conf
+[DEFAULT]
+bind_ip = 192.168.0.201
+bind_port = 6001
+user = swift
+swift_dir = /etc/swift
+devices = /srv/node
+mount_check = True
+[pipeline:main]
+pipeline = healthcheck recon container-server
+[filter:recon]
+use = egg:swift#recon
+recon_cache_path = /var/cache/swift
+
+vi /etc/swift/object-server.conf
+[DEFAULT]
+bind_ip = 192.168.0.201
+bind_port = 6000
+user = swift
+swift_dir = /etc/swift
+devices = /srv/node
+mount_check = True
+[pipeline:main]
+pipeline = healthcheck recon object-server
+[filter:recon]
+use = egg:swift#recon
+recon_cache_path = /var/cache/swift
+recon_lock_path = /var/lock
+
+# Ensure proper ownership of the mount point directory structure:
+chown -R swift:swift /srv/node
+mkdir -p /var/cache/swift
+chown -R root:swift /var/cache/swift
+chmod -R 775 /var/cache/swift
+-------------------------------------------------------------------------------
+	9.3 Create and distribute initial rings			
+		9.3.1 Create account ring		
+-------------------------------------------------------------------------------
+# Perform these steps on the controller node.
+# Change to the /etc/swift directory.
+cd /etc/swift
+# Create the base account.builder file:
+swift-ring-builder account.builder create 10 1 1
+# Add each storage node to the ring:
+swift-ring-builder account.builder add --region 1 --zone 1 --ip 192.168.0.201 --port 6002 --device sdb --weight 100
+swift-ring-builder account.builder add --region 1 --zone 2 --ip 192.168.0.202 --port 6002 --device sdb --weight 100
+# Verify the ring contents:
+swift-ring-builder account.builder
+# Rebalance the ring:
+swift-ring-builder account.builder rebalance
+-------------------------------------------------------------------------------
+		9.3.2 Create container ring		
+-------------------------------------------------------------------------------
+# Change to the /etc/swift directory.
+cd /etc/swift
+# Create the base container.builder file:
+swift-ring-builder container.builder create 10 1 1
+# Add each storage node to the ring:
+swift-ring-builder container.builder add --region 1 --zone 1 --ip 192.168.0.201 --port 6001 --device sdb --weight 100
+swift-ring-builder container.builder add --region 1 --zone 2 --ip 192.168.0.202 --port 6001 --device sdb --weight 100
+# Verify the ring contents:
+swift-ring-builder container.builder
+# Rebalance the ring:
+swift-ring-builder container.builder rebalance
+-------------------------------------------------------------------------------
+		9.3.3 Create object ring		
+-------------------------------------------------------------------------------
+# Change to the /etc/swift directory.
+cd /etc/swift
+# Create the base object.builder file:
+swift-ring-builder object.builder create 10 1 1
+swift-ring-builder object.builder add --region 1 --zone 1 --ip 192.168.0.201 --port 6000 --device sdb --weight 100
+swift-ring-builder object.builder add --region 1 --zone 2 --ip 192.168.0.202 --port 6000 --device sdb --weight 100
+# Verify the ring contents:
+swift-ring-builder object.builder
+# Rebalance the ring:
+swift-ring-builder object.builder rebalance
+-------------------------------------------------------------------------------
+		9.3.4 Distribute ring configuration files		
+-------------------------------------------------------------------------------
+scp /etc/swift/*.ring.gz root@192.168.0.201:/etc/swift/
+scp /etc/swift/*.ring.gz root@192.168.0.202:/etc/swift/
+-------------------------------------------------------------------------------
+	9.4 Finalize installation			
+-------------------------------------------------------------------------------
+# Obtain the /etc/swift/swift.conf file from the Object Storage source repository:
+curl -o /etc/swift/swift.conf https://git.openstack.org/cgit/openstack/swift/plain/etc/swift.conf-sample?h=stable/mitaka
+
+vi /etc/swift/swift.conf
+[swift-hash]
+swift_hash_path_suffix = HASH_PATH_SUFFIX
+swift_hash_path_prefix = HASH_PATH_PREFIX
+# Replace HASH_PATH_PREFIX(=sniperpre) and HASH_PATH_SUFFIX(=snipersuf) with unique values.
+[storage-policy:0]
+name = Policy-0
+default = yes
+
+# Copy the swift.conf file to the /etc/swift directory on each storage node and any additional nodes running the proxy service.
+scp /etc/swift/swift.conf root@192.168.0.201:/etc/swift/
+scp /etc/swift/swift.conf root@192.168.0.202:/etc/swift/
+# On all nodes, ensure proper ownership of the configuration directory:
+chown -R root:swift /etc/swift
+
+# On the controller node and any other nodes running the proxy service, start the Object Storage proxy service including its dependencies and configure them to start when the system boots:
+systemctl enable openstack-swift-proxy.service memcached.service
+systemctl start openstack-swift-proxy.service memcached.service
+systemctl status openstack-swift-proxy.service memcached.service
+
+# On the storage nodes, start the Object Storage services and configure them to start when the system boots:
+systemctl enable openstack-swift-account.service openstack-swift-account-auditor.service openstack-swift-account-reaper.service openstack-swift-account-replicator.service
+systemctl start openstack-swift-account.service openstack-swift-account-auditor.service openstack-swift-account-reaper.service openstack-swift-account-replicator.service
+systemctl status openstack-swift-account.service openstack-swift-account-auditor.service openstack-swift-account-reaper.service openstack-swift-account-replicator.service
+systemctl enable openstack-swift-container.service openstack-swift-container-auditor.service openstack-swift-container-replicator.service openstack-swift-container-updater.service
+systemctl start openstack-swift-container.service openstack-swift-container-auditor.service openstack-swift-container-replicator.service openstack-swift-container-updater.service
+systemctl status openstack-swift-container.service openstack-swift-container-auditor.service openstack-swift-container-replicator.service openstack-swift-container-updater.service
+systemctl enable openstack-swift-object.service openstack-swift-object-auditor.service openstack-swift-object-replicator.service openstack-swift-object-updater.service
+systemctl start openstack-swift-object.service openstack-swift-object-auditor.service openstack-swift-object-replicator.service openstack-swift-object-updater.service
+systemctl status openstack-swift-object.service openstack-swift-object-auditor.service openstack-swift-object-replicator.service openstack-swift-object-updater.service
+-------------------------------------------------------------------------------
+	9.5 Verify operation			
+-------------------------------------------------------------------------------
+# Perform these steps on the controller node.
+# If one or more of these steps do not work, check the /var/log/audit/audit.log file for SELinux messages indicating denial of actions for the swift processes. If present, change the security context of the /srv/node directory to the lowest security level (s0) for the swift_data_t type, object_r role and the system_u user:
+chcon -R system_u:object_r:swift_data_t:s0 /srv/node
+# Source the demo credentials:
+source demo-openrc.sh
+# Show the service status:
+swift stat
+# 서비스로 올리면 안된다. 
+/usr/bin/swift-proxy-server /etc/swift/proxy-server.conf & > /dev/null
+# Create container1 container:
+openstack container create container1
+# Upload a test file to the container1 container:
+touch test.txt
+swift upload container1 test.txt
+# List files in the container1 container:
+openstack object list container1
+# Download a test file from the container1 container
+openstack object save container1 FILE
+-------------------------------------------------------------------------------
+10. Orchestration service				
+	10.1 Install and configure			
+		10.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+# To create the database, complete these steps:
+mysql -u root -p
+CREATE DATABASE heat;
+GRANT ALL PRIVILEGES ON heat.* TO 'heat'@'localhost' IDENTIFIED BY 'heatdbpass';
+GRANT ALL PRIVILEGES ON heat.* TO 'heat'@'%' IDENTIFIED BY 'heatdbpass';
+exit
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# To create the service credentials, complete these steps:
+openstack user create --domain default --password-prompt heat
+# User Password: heatpass
+# Add the admin role to the heat user:
+openstack role add --project service --user heat admin
+# Create the heat and heat-cfn service entities:
+openstack service create --name heat --description "Orchestration" orchestration
+openstack service create --name heat-cfn --description "Orchestration"  cloudformation
+# Create the Orchestration service API endpoints:
+openstack endpoint create --region RegionOne orchestration public http://controller:8004/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne orchestration internal http://controller:8004/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne orchestration admin http://controller:8004/v1/%\(tenant_id\)s
+openstack endpoint create --region RegionOne cloudformation public http://controller:8000/v1
+openstack endpoint create --region RegionOne cloudformation internal http://controller:8000/v1
+openstack endpoint create --region RegionOne cloudformation admin http://controller:8000/v1
+# Create the heat domain that contains projects and users for stacks:
+openstack domain create --description "Stack projects and users" heat
+# Create the heat_domain_admin user to manage projects and users in the heat domain:
+openstack user create --domain heat --password-prompt heat_domain_admin
+# User Password: heatdomainpass
+# Add the admin role to the heat_domain_admin user in the heat domain to enable administrative stack management privileges by the heat_domain_admin user:
+openstack role add --domain heat --user-domain heat --user heat_domain_admin admin
+# Create the heat_stack_owner role:
+openstack role create heat_stack_owner
+# Add the heat_stack_owner role to the demo project and user to enable stack management by the demo user:
+openstack role add --project demo --user demo heat_stack_owner
+# Create the heat_stack_user role:
+openstack role create heat_stack_user
+-------------------------------------------------------------------------------
+		10.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+# Install the packages:
+yum install -y openstack-heat-api openstack-heat-api-cfn openstack-heat-engine
+
+vi /etc/heat/heat.conf 
+[database]
+connection = mysql+pymysql://heat:heatdbpass@controller/heat
+[DEFAULT]
+rpc_backend = rabbit
+heat_metadata_server_url = http://controller:8000
+heat_waitcondition_server_url = http://controller:8000/v1/waitcondition
+stack_domain_admin = heat_domain_admin
+stack_domain_admin_password = heatdomainpass
+stack_user_domain_name = heat
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = heat
+password = heatpass
+[trustee]
+auth_plugin = password
+auth_url = http://controller:35357
+username = heat
+password = heatpass
+user_domain_id = default
+[clients_keystone]
+auth_uri = http://controller:35357
+[ec2authtoken]
+auth_uri = http://controller:5000
+
+# Populate the Orchestration database:
+su -s /bin/sh -c "heat-manage db_sync" heat
+-------------------------------------------------------------------------------
+		10.1.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-heat-api.service openstack-heat-api-cfn.service openstack-heat-engine.service
+systemctl start openstack-heat-api.service openstack-heat-api-cfn.service openstack-heat-engine.service
+systemctl status openstack-heat-api.service openstack-heat-api-cfn.service openstack-heat-engine.service
+-------------------------------------------------------------------------------
+	10.2 Verify operation			
+-------------------------------------------------------------------------------
+# Perform these commands on the controller node.
+# Source the admin tenant credentials:
+source admin-openrc.sh
+# List service components to verify successful launch and registration of each process:
+openstack orchestration service list
+# This output should indicate four heat-engine components on the controller node.
+-------------------------------------------------------------------------------
+11. Telemetry service				
+	11.1 Install and configure			
+		11.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+# Create the ceilometer database:
+mongo --host controller --eval '
+  db = db.getSiblingDB("ceilometer");
+  db.createUser({user: "ceilometer",
+  pwd: "ceilometerdbpass",
+  roles: [ "readWrite", "dbAdmin" ]})'
+# Source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# To create the service credentials, complete these steps:
+openstack user create --domain default --password-prompt ceilometer
+# User Password: ceilometerpass
+# Add the admin role to the ceilometer user.
+openstack role add --project service --user ceilometer admin
+# Create the ceilometer service entity:
+openstack service create --name ceilometer --description "Telemetry" metering
+# Create the Telemetry service API endpoints:
+openstack endpoint create --region RegionOne metering public http://controller:8777
+openstack endpoint create --region RegionOne metering internal http://controller:8777
+openstack endpoint create --region RegionOne metering admin http://controller:8777
+-------------------------------------------------------------------------------
+		11.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+# Install the packages:
+yum install -y openstack-ceilometer-api openstack-ceilometer-collector openstack-ceilometer-notification openstack-ceilometer-central python-ceilometerclient
+
+vi /etc/ceilometer/ceilometer.conf
+[database]
+connection = mongodb://ceilometer:ceilometerdbpass@controller:27017/ceilometer
+[DEFAULT]
+rpc_backend = rabbit
+auth_strategy = keystone
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = ceilometer
+password = ceilometerpass
+[service_credentials]
+os_auth_url = http://controller:5000/v2.0
+os_username = ceilometer
+os_tenant_name = service
+os_password = ceilometerpass
+interface = internalURL
+region_name = RegionOne
+-------------------------------------------------------------------------------
+		11.1.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-ceilometer-api.service openstack-ceilometer-notification.service openstack-ceilometer-central.service openstack-ceilometer-collector.service
+systemctl start openstack-ceilometer-api.service openstack-ceilometer-notification.service openstack-ceilometer-central.service openstack-ceilometer-collector.service openstack-ceilometer-alarm-evaluator.service openstack-ceilometer-alarm-notifier.service
+systemctl status openstack-ceilometer-api.service openstack-ceilometer-notification.service openstack-ceilometer-central.service openstack-ceilometer-collector.service openstack-ceilometer-alarm-evaluator.service openstack-ceilometer-alarm-notifier.service
+-------------------------------------------------------------------------------
+	11.2 Enable Image service meters			
+		11.2.1 Configure the Image service to use Telemetry		
+-------------------------------------------------------------------------------
+vi /etc/glance/glance-api.conf
+[DEFAULT]
+rpc_backend = rabbit
+[oslo_messaging_notifications]
+driver = messagingv2
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+
+vi /etc/glance/glance-registry.conf
+[DEFAULT]
+rpc_backend = rabbit
+[oslo_messaging_notifications]
+driver = messagingv2
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+-------------------------------------------------------------------------------
+		11.2.2 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl restart openstack-glance-api.service openstack-glance-registry.service
+-------------------------------------------------------------------------------
+	11.3 Enable Compute service meters			
+		11.3.1 Install and configure components		
+-------------------------------------------------------------------------------
+yum install -y openstack-ceilometer-compute python-ceilometerclient python-pecan
+
+vi /etc/ceilometer/ceilometer.conf
+[DEFAULT]
+rpc_backend = rabbit
+auth_strategy = keystone
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = ceilometer
+password = ceilometerpass
+[service_credentials]
+os_auth_url = http://controller:5000/v2.0
+os_username = ceilometer
+os_tenant_name = service
+os_password = ceilometerpass
+interface = internalURL
+region_name = RegionOne
+-------------------------------------------------------------------------------
+		11.3.2 Configure Compute to use Telemetry		
+-------------------------------------------------------------------------------
+vi /etc/nova/nova.conf
+[DEFAULT]
+instance_usage_audit = True
+instance_usage_audit_period = hour
+notify_on_state_change = vm_and_task_state
+notification_driver = messagingv2
+-------------------------------------------------------------------------------
+		11.3.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-ceilometer-compute.service
+systemctl start openstack-ceilometer-compute.service
+systemctl status openstack-ceilometer-compute.service
+systemctl restart openstack-nova-compute.service
+-------------------------------------------------------------------------------
+	11.4 Enable Block Storage meters			
+		11.4.1 Configure Cinder to use Telemetry		
+-------------------------------------------------------------------------------
+# Your environment must include the Block Storage service
+vi /etc/cinder/cinder.conf
+[oslo_messaging_notifications]
+driver = messagingv2
+-------------------------------------------------------------------------------
+		11.4.2 Finalize installation		
+-------------------------------------------------------------------------------
+# Restart the Block Storage services on the controller node:
+systemctl restart openstack-cinder-api.service openstack-cinder-scheduler.service
+# Restart the Block Storage services on the storage nodes:
+systemctl restart openstack-cinder-volume.service
+-------------------------------------------------------------------------------
+	11.5 Enable Object Storage meters			
+		11.5.1 Prerequisites		
+-------------------------------------------------------------------------------
+# Your environment must include the Object Storage service.
+# Source the admin credentials to gain access to admin-only CLI commands.
+. admin-openrc.sh
+# Create the ResellerAdmin role:
+openstack role create ResellerAdmin
+# Add the ResellerAdmin role to the ceilometer user:
+openstack role add --project service --user ceilometer ResellerAdmin
+-------------------------------------------------------------------------------
+		11.5.2 Install components		
+-------------------------------------------------------------------------------
+# Install the packages:
+yum install -y python-ceilometermiddleware
+-------------------------------------------------------------------------------
+		11.5.3 Configure Object Storage to use Telemetry		
+-------------------------------------------------------------------------------
+vi /etc/swift/proxy-server.conf
+[filter:keystoneauth]
+operator_roles = admin,user,ResellerAdmin
+[pipeline:main]
+pipeline = ceilometer catch_errors gatekeeper healthcheck proxy-logging cache container_sync bulk ratelimit authtoken keystoneauth container-quotas account-quotas slo dlo versioned_writes proxy-logging proxy-server
+[filter:ceilometer]
+paste.filter_factory = ceilometermiddleware.swift:filter_factory
+control_exchange = swift
+url = rabbit://openstack:RABBIT_PASS@controller:5672/
+driver = messagingv2
+topic = notifications
+log_level = WARN
+-------------------------------------------------------------------------------
+		11.5.4 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl restart openstack-swift-proxy.service
+-------------------------------------------------------------------------------
+	11.6 Alarming service			
+		11.6.1 Prerequisites		
+-------------------------------------------------------------------------------
+mysql -u root -p
+CREATE DATABASE aodh;
+GRANT ALL PRIVILEGES ON aodh.* TO 'aodh'@'localhost' IDENTIFIED BY 'aodhdbpass';
+GRANT ALL PRIVILEGES ON aodh.* TO 'aodh'@'%' IDENTIFIED BY 'aodhdbpass';
+exit
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# To create the service credentials, complete these steps:
+openstack user create --domain default --password-prompt aodh
+# User Password: aodhpass
+openstack role add --project service --user aodh admin
+# Create the aodh service entity:
+openstack service create --name aodh --description "Telemetry" alarming
+# Create the Alarming service API endpoints:
+openstack endpoint create --region RegionOne alarming public http://controller:8042
+openstack endpoint create --region RegionOne alarming internal http://controller:8042
+openstack endpoint create --region RegionOne alarming admin http://controller:8042
+-------------------------------------------------------------------------------
+		11.6.2 Install and configure components		
+-------------------------------------------------------------------------------
+# Install the packages:
+yum install -y openstack-aodh-api openstack-aodh-evaluator openstack-aodh-notifier openstack-aodh-listener openstack-aodh-expirer python-ceilometerclient
+
+vi /etc/aodh/aodh.conf
+[database]
+connection = mysql+pymysql://aodh:aodhdbpass@controller/aodh
+[DEFAULT]
+rpc_backend = rabbit
+auth_strategy = keystone
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = aodh
+password = aodhpass
+[service_credentials]
+os_auth_url = http://controller:5000/v2.0
+os_username = aodh
+os_tenant_name = service
+os_password = aodhpass
+interface = internalURL
+region_name = RegionOne
+-------------------------------------------------------------------------------
+		11.6.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-aodh-api.service openstack-aodh-evaluator.service openstack-aodh-notifier.service openstack-aodh-listener.service
+systemctl start openstack-aodh-api.service openstack-aodh-evaluator.service openstack-aodh-notifier.service openstack-aodh-listener.service
+systemctl status openstack-aodh-api.service openstack-aodh-evaluator.service openstack-aodh-notifier.service openstack-aodh-listener.service
+-------------------------------------------------------------------------------
+	11.7 Verify operation			
+-------------------------------------------------------------------------------
+# Perform these steps on the controller node.
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# List available meters:
+ceilometer meter-list
+# Download the CirrOS image from the Image service:
+IMAGE_ID=$(glance image-list | grep 'cirros' | awk '{ print $2 }')
+glance image-download $IMAGE_ID > /tmp/cirros.img
+# List available meters again to validate detection of the image download:
+ceilometer meter-list
+# Retrieve usage statistics from the image.download meter:
+ceilometer statistics -m image.download -p 60
+# Remove the previously downloaded image file /tmp/cirros.img:
+rm /tmp/cirros.img
+-------------------------------------------------------------------------------
+12. Database service				
+	12.1 Install and configure			
+		12.1.1 Prerequisites		
+-------------------------------------------------------------------------------
+mysql -u root -p
+CREATE DATABASE trove;
+GRANT ALL PRIVILEGES ON trove.* TO 'trove'@'localhost' IDENTIFIED BY 'trovedbpass';
+GRANT ALL PRIVILEGES ON trove.* TO 'trove'@'%' IDENTIFIED BY 'trovedbpass';
+exit
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# Create the trove user:
+openstack user create --domain default --password-prompt trove
+# User Password: trovepass
+# Add the admin role to the trove user:
+openstack role add --project service --user trove admin
+# Create the trove service entity:
+openstack service create --name trove --description "Database" database
+# Create the Database service API endpoints:
+openstack endpoint create --region RegionOne database public http://controller:8779/v1.0/%\(tenant_id\)s
+openstack endpoint create --region RegionOne database internal http://controller:8779/v1.0/%\(tenant_id\)s
+openstack endpoint create --region RegionOne database admin http://controller:8779/v1.0/%\(tenant_id\)s
+-------------------------------------------------------------------------------
+		12.1.2 Install and configure components		
+-------------------------------------------------------------------------------
+# Install the packages:
+yum install -y openstack-trove python-troveclient
+
+# In /etc/trove, edit the following configuration files, taking the below actions for each file:
+vi /etc/trove/trove.conf
+vi /etc/trove/trove-taskmanager.conf
+vi /etc/trove/trove-conductor.conf
+[DEFAULT]
+log_dir = /var/log/trove
+trove_auth_url = http://controller:5000/v2.0
+nova_compute_url = http://controller:8774/v2
+cinder_url = http://controller:8776/v1
+swift_url = http://controller:8080/v1/AUTH_
+notifier_queue_hostname = controller
+rpc_backend = rabbit
+[database]
+connection = mysql://trove:trovedbpass@controller/trove
+[oslo_messaging_rabbit]
+rabbit_host = controller
+rabbit_userid = openstack
+rabbit_password = rabbitpass
+
+# Verify that the api-paste.ini file is present in /etc/trove.
+# If the file is not present, you can get it from this location.
+vi /etc/trove/trove.conf
+[DEFAULT]
+auth_strategy = keystone
+# Config option for showing the IP address that nova doles out
+add_addresses = True
+network_label_regex = ^NETWORK_LABEL$
+api_paste_config = /etc/trove/api-paste.ini
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = trove
+password = trovepass
+
+vi /etc/trove/trove-taskmanager.conf
+[DEFAULT]
+# Configuration options for talking to nova via the novaclient.
+# These options are for an admin user in your keystone config.
+# It proxy's the token received from the user to send to nova
+# via this admin users creds,
+# basically acting like the client via that proxy token.
+nova_proxy_admin_user = admin
+nova_proxy_admin_pass = adminpass
+nova_proxy_admin_tenant_name = service
+taskmanager_manager = trove.taskmanager.manager.Manager
+
+vi /etc/trove/trove-guestagent.conf
+rabbit_host = controller
+rabbit_password = rabbitpass
+nova_proxy_admin_user = admin
+nova_proxy_admin_pass = adminpass
+nova_proxy_admin_tenant_name = service
+trove_auth_url = http://controller:35357/v2.0
+
+# Populate the trove database you created earlier in this procedure:
+su -s /bin/sh -c "trove-manage db_sync" trove
+-------------------------------------------------------------------------------
+		12.1.3 Finalize installation		
+-------------------------------------------------------------------------------
+systemctl enable openstack-trove-api.service openstack-trove-taskmanager.service openstack-trove-conductor.service
+systemctl start openstack-trove-api.service openstack-trove-taskmanager.service openstack-trove-conductor.service
+systemctl status openstack-trove-api.service openstack-trove-taskmanager.service openstack-trove-conductor.service
+-------------------------------------------------------------------------------
+	12.2 Verify operation			
+-------------------------------------------------------------------------------
+# Source the admin tenant credentials:
+source admin-openrc.sh
+# Run the trove list command. You should see output similar to this:
+trove list
+# Add a datastore to trove:
+# Create a trove image.
+# Upload the image to glance. Example:
+glance image-create --name "mysqlTest" --disk-format qcow2 --container-format bare --file mysql-5.6.qcow2
+su -s /bin/sh -c "trove-manage --config-file /etc/trove/trove.conf datastore_update mysql ''" trove
+# Update the datastore to use the new image.
+su -s /bin/sh -c "trove-manage --config-file /etc/trove/trove.conf datastore_version_update mysql mysql-5.6 mysql glance_image_ID '' 1" trove
+# Create a database instance.
+-------------------------------------------------------------------------------
+13. Launch an instance				
+	13.1 Create virtual networks			
+		13.1.1 Provider network		
+			13.1.1.1 Create the provider network	
+-------------------------------------------------------------------------------
+# On the controller node, source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# Create the network:
+neutron net-create --shared --provider:physical_network provider --provider:network_type flat provider
+
+vi /etc/neutron/plugins/ml2/ml2_conf.ini
+[ml2_type_flat]
+flat_networks = provider
+
+vi /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+physical_interface_mappings = public:eno2
+# Create a subnet on the network:
+neutron subnet-create --name provider --allocation-pool start=10.0.7.101,end=10.0.7.200 --dns-nameserver 8.8.8.8 --gateway 10.0.7.1 provider 10.0.7.0/24
+
+-------------------------------------------------------------------------------
+		13.1.2 Self-service network		
+			13.1.2.1 Create the self-service network	
+-------------------------------------------------------------------------------
+# You must create the provider network before the self-service network.
+# On the controller node, source the demo credentials to gain access to user-only CLI commands:
+. demo-openrc.sh
+# Create the network:
+neutron net-create selfservice
+
+vi /etc/neutron/plugins/ml2/ml2_conf.ini
+[ml2]
+tenant_network_types = vxlan
+[ml2_type_vxlan]
+vni_ranges = 1:1000
+
+# Create a subnet on the network:
+neutron subnet-create --name selfservice --dns-nameserver 121.156.120.98 --gateway 172.16.1.1 selfservice 172.16.1.0/24
+-------------------------------------------------------------------------------
+			13.1.2.2 Create a router	
+-------------------------------------------------------------------------------
+# On the controller node, source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# Add the router: external option to the provider network:
+neutron net-update provider --router:external
+# Source the demo credentials to gain access to user-only CLI commands:
+. demo-openrc.sh
+# Create the router:
+neutron router-create router
+# Add the self-service network subnet as an interface on the router:
+neutron router-interface-add router selfservice
+# Set a gateway on the provider network on the router:
+neutron router-gateway-set router provider
+# 사용할 IP 주소가 있어야 연결이 가능하다!!!
+-------------------------------------------------------------------------------
+			13.1.2.3 Verify operation	
+-------------------------------------------------------------------------------
+# On the controller node, source the admin credentials to gain access to admin-only CLI commands:
+. admin-openrc.sh
+# List network namespaces. You should see one qrouter namespace and two qdhcp namespaces.
+ip netns
+# List ports on the router to determine the gateway IP address on the provider network:
+neutron router-port-list router
+# Ping this IP address from the controller node or any host on the physical provider network:
+ping -c 4 10.0.7.102
+-------------------------------------------------------------------------------
+	13.2 Create m1.nano flavor
+-------------------------------------------------------------------------------
+openstack flavor create --id 0 --vcpus 1 --ram 64 --disk 1 m1.nano
+-------------------------------------------------------------------------------
+	13.3 Generate a key pair			
+-------------------------------------------------------------------------------
+# Source the demo tenant credentials:
+. demo-openrc.sh
+# Generate and add a key pair:
+ssh-keygen -q -N ""
+openstack keypair create --public-key ~/.ssh/id_rsa.pub mykey
+# Verify addition of the key pair:
+nova keypair-list
+-------------------------------------------------------------------------------
+	13.4 Add security group rules			
+-------------------------------------------------------------------------------
+# Permit ICMP (ping):
+openstack security group rule create --proto icmp default
+# Permit secure shell (SSH) access:
+openstack security group rule create --proto tcp --dst-port 22 default
+-------------------------------------------------------------------------------
+	13.5 Launch an instance			
+		13.5.1 Launch an instance on the provider network		
+			13.5.1.1 Determine instance options	
+-------------------------------------------------------------------------------
+# On the controller node, source the demo credentials to gain access to user-only CLI commands:
+. demo-openrc.sh
+# List available flavors:
+openstack flavor list
+# You can also reference a flavor by ID.
+# List available images:
+openstack image list
+# List available networks:
+openstack network list
+# If you chose option 2, the output should also contain the selfservice self-service network.
+# List available security groups:
+openstack security group list
+-------------------------------------------------------------------------------
+			13.5.1.2 Launch the instance	
+-------------------------------------------------------------------------------
+# Replace PROVIDER_NET_ID with the ID of the provider provider network.
+openstack server create --flavor m1.tiny --image cirros --nic net-id=767e428a-3d2b-4d71-8500-558c0c7d7f54 --security-group default --key-name mykey provider-instance
+# Check the status of your instance:
+openstack server list
+-------------------------------------------------------------------------------
+			13.5.1.3 Access the instance using the virtual console	
+-------------------------------------------------------------------------------
+# Obtain a Virtual Network Computing (VNC) session URL for your instance and access it from a web browser:
+openstack console url show provider-instance
+# Verify access to the provider physical network gateway:
+ping -c 4 10.0.7.1
+# Verify access to the internet:
+ping -c 4 openstack.org
+-------------------------------------------------------------------------------
+			13.5.1.4 Access the instance remotely	
+-------------------------------------------------------------------------------
+# Verify connectivity to the instance from the controller node or any host on the provider physical network:
+ping -c 4 10.0.7.103
+# Access your instance using SSH from the controller node or any host on the provider physical network:
+ssh cirros@10.0.7.103
+-------------------------------------------------------------------------------
+		13.5.2 Launch an instance on the self-service network		
+			13.5.2.1 Determine instance options	
+-------------------------------------------------------------------------------
+# On the controller node, source the demo credentials to gain access to user-only CLI commands:
+. demo-openrc.sh
+# List available flavors:
+openstack flavor list
+# You can also reference a flavor by ID.
+# List available images:
+openstack image list
+# List available networks:
+openstack network list
+# List available security groups:
+openstack security group list
+# Launch the instance:
+# Replace SELFSERVICE_NET_ID with the ID of the selfservice network.
+openstack server create --flavor m1.tiny --image cirros --nic net-id=459ca71d-99a0-4794-beb1-d2b41041d4ab --security-group default --key-name mykey selfservice-instance
+# Check the status of your instance:
+openstack server list
+-------------------------------------------------------------------------------
+			13.5.2.2 Access the instance using a virtual console	
+-------------------------------------------------------------------------------
+# Obtain a Virtual Network Computing (VNC) session URL for your instance and access it from a web browser:
+openstack console url show selfservice-instance
+# Verify access to the self-service network gateway:
+ping -c 4 172.16.1.1
+# Verify access to the internet:
+ping -c 4 openstack.org
+-------------------------------------------------------------------------------
+			13.5.2.3 Access the instance remotely	
+-------------------------------------------------------------------------------
+# Create a floating IP address on the provider virtual network:
+openstack ip floating create provider
+# Associate the floating IP address with the instance:
+# nova-manage floating create 10.0.7.154 or 10.0.7.0/24
+openstack ip floating add 10.0.7.104 selfservice-instance
+# Check the status of your floating IP address:
+openstack server list
+# Verify connectivity to the instance via floating IP address from the controller node or any host on the provider physical network:
+ping -c 4 10.0.7.104
+# Access your instance using SSH from the controller node or any host on the provider physical network:
+ssh cirros@10.0.7.104
+-------------------------------------------------------------------------------
+	13.6 Block Storage			
+		13.6.1 Create a volume		
+-------------------------------------------------------------------------------
+# Source the demo credentials to perform the following steps as a non-administrative project:
+. demo-openrc.sh
+# Create a 1 GB volume:
+openstack volume create --size 1 volume1
+# After a short time, the volume status should change from creating to available:
+openstack volume list
+-------------------------------------------------------------------------------
+		13.6.2 Attach the volume to an instance		
+-------------------------------------------------------------------------------
+# Attach a volume to an instance:
+openstack server add volume INSTANCE_NAME VOLUME_NAME
+# Replace INSTANCE_NAME with the name of the instance and VOLUME_NAME with the name of the volume you want to attach to it.
+# Example : openstack server add volume provider-instance volume1
+# List volumes:
+openstack volume list
+# Access your instance using SSH and use the fdisk command to verify presence of the volume as the /dev/vdb block storage device:
+sudo fdisk -l
+# You must create a file system on the device and mount it to use the volume.
+-------------------------------------------------------------------------------
+	13.7 Orchestration			
+		13.7.1 Create a template		
+-------------------------------------------------------------------------------
+vi demo-template.yml
+heat_template_version: 2015-10-15
+description: Launch a basic instance with CirrOS image using the
+             ``m1.tiny`` flavor, ``mykey`` key,  and one network.
+
+parameters:
+  NetID:
+    type: string
+    description: Network ID to use for the instance.
+
+resources:
+  server:
+    type: OS::Nova::Server
+    properties:
+      image: cirros
+      flavor: m1.tiny
+      key_name: mykey
+      networks:
+      - network: { get_param: NetID }
+
+outputs:
+  instance_name:
+    description: Name of the instance.
+    value: { get_attr: [ server, name ] }
+  instance_ip:
+    description: IP address of the instance.
+    value: { get_attr: [ server, first_address ] }
+-------------------------------------------------------------------------------
+		13.7.2 Create a stack		
+-------------------------------------------------------------------------------
+# Source the demo credentials to perform the following steps as a non-administrative project:
+source demo-openrc.sh
+# Determine available networks.
+openstack network list
+# Set the NET_ID environment variable to reflect the ID of a network. For example, using the provider network:
+export NET_ID=$(openstack network list | awk '/ provider / { print $2 }')
+# Create a stack of one CirrOS instance on the provider network:
+openstack stack create -t demo-template.yml --parameter "NetID=$NET_ID" stack
+# After a short time, verify successful creation of the stack:
+openstack stack list
+# Show the name and IP address of the instance and compare with the output of the OpenStack client:
+openstack stack output show --all stack
+openstack server list
+# Delete the stack.
+openstack stack delete --yes stack
+-------------------------------------------------------------------------------
+	13.8 Shared File Systems			
+		13.8.1 Create the service image		
+-------------------------------------------------------------------------------
+# Download the source image of the share server:
+wget http://tarballs.openstack.org/manila-image-elements/images/manila-service-image-master.qcow2
+# Add the image to the Image service:
+openstack image create "manila-service-image" --file manila-service-image-master.qcow2 --disk-format qcow2 --container-format bare --public
+# Create a new flavor to support the service image:
+openstack flavor create manila-service-flavor --id 100 --ram 256 --disk 0 --vcpus 1
+# Flavor is image specific and may differ from image to image.
+-------------------------------------------------------------------------------
+		13.8.2 Launch an instance of the service image		
+-------------------------------------------------------------------------------
+# This section uses manila-service-image image as an instance for mounting shares.
+1. Launch an instance using the manila-service-image and manila-service-flavor.
+2. Log into the instance using manila as the username and password.
+-------------------------------------------------------------------------------
+		13.8.3 Create a share		
+			13.8.3.1 Option 1 - Create shares without share servers management support	
+				13.8.3.1.1 Create a share type
+-------------------------------------------------------------------------------
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# Create a default share type with DHSS disabled:
+manila type-create default_share_type False
+-------------------------------------------------------------------------------
+				13.8.3.1.2 Create a share
+-------------------------------------------------------------------------------
+# Source the demo credentials to perform the following steps as a non-administrative project:
+source demo-openrc.sh
+# Create a NFS share:
+manila create NFS 1 --name share1
+# After some time, the share status should change from creating to available:
+manila list
+# Determine export IP address of the share:
+manila show share1
+# Configure user access to the new share before attempting to mount it via the network:
+manila access-allow share1 ip INSTANCE_IP_ADDRESS
+# Replace INSTANCE_IP_ADDRESS with the IP address of the instance.
+-------------------------------------------------------------------------------
+				13.8.3.1.3 Mount the share from an instance
+-------------------------------------------------------------------------------
+# Create a folder where the mount will be placed:
+mkdir ~/test_folder
+# Mount the NFS share in the instance using the export location of the share:
+mount -t nfs 10.0.0.41:/var/lib/manila/mnt/share-b94a4dbf-49e2-452c-b9c7-510277adf5c6 ~/test_folder
+-------------------------------------------------------------------------------
+			13.8.3.2 Option 2 - Create shares with share servers management support	
+				13.8.3.2.1 Create a share type
+-------------------------------------------------------------------------------
+# Source the admin credentials to gain access to admin-only CLI commands:
+source admin-openrc.sh
+# Create a default share type with DHSS enabled:
+manila type-create generic_share_type True
+-------------------------------------------------------------------------------
+				13.8.3.2.2 Create a share network
+-------------------------------------------------------------------------------
+# Source the demo credentials to perform the following steps as a non-administrative project:
+source demo-openrc.sh
+# List available networks to obtain the network and subnet ID for the selfservice network:
+neutron net-list
+# Create the share network using the selfservice network and subnet IDs:
+manila share-network-create --name selfservice-net-share1 --neutron-net-id 4e963f5b-b5f3-4db1-a935-0d34c8629e7b --neutron-subnet-id 005bf8d1-798e-450f-9efe-72bc0c3be491
+-------------------------------------------------------------------------------
+				13.8.3.2.3 Create a share
+-------------------------------------------------------------------------------
+# Source the demo credentials to perform the following steps as a non-administrative project:
+. demo-openrc.sh
+# Create a NFS share using the share network:
+manila create NFS 1 --name share2 --share-network selfservice-net-share1 --share-type generic_share_type
+# After some time, the share status should change from creating to available:
+manila list
+# Determine export IP address of the share:
+manila show share2
+# Configure user access to the new share before attempting to mount it via the network:
+manila access-allow share2 ip INSTANCE_IP_ADDRESS
+# Replace INSTANCE_IP_ADDRESS with the IP address of the instance.
+-------------------------------------------------------------------------------
+				13.8.3.2.4 Mount the share from an instance
+-------------------------------------------------------------------------------
+# Create a folder where the mount will be placed:
+mkdir ~/test_folder
+# Mount the NFS share in the instance using the export location of the share:
+mount -t nfs 10.254.0.6:/shares/share-0bfd69a1-27f0-4ef5-af17-7cd50bce6550 ~/test_folder
+-------------------------------------------------------------------------------
+
+
+# don't delete
+# floating ip
+nova floating-ip-pool-list
+nova-manage floating list
+nova-manage floating create --ip_range 10.0.7.154 --pool provider
+#nova-manage floating delete 10.0.7.154
+#범위내(nova-manage floating list)에 있는 것 중 하나로 나온다.
+nova floating-ip-create provider
+nova list
+nova add-floating-ip 02064b9d-d495-4222-a7db-ca51ec42bd3e 10.0.7.154
+#nova remove-floating-ip 02064b9d-d495-4222-a7db-ca51ec42bd3e 10.0.7.154
+nova floating-ip-list
+
+#The following nova-manage commands apply to floating IPs.
+nova-manage floating list: List the floating IP addresses in the pool.
+nova-manage floating create --pool=[pool name] --ip_range=[CIDR]: Create specific floating IPs for either a single address or a subnet.
+nova-manage floating delete [cidr]: Remove floating IP addresses using the same parameters as the create command.
+#Adding a floating IP to an instance is a two step process:
+nova floating-ip-create: Allocate a floating IP address from the list of available addresses.
+nova add-floating-ip: Add an allocated floating IP address to a running instance.
+
+# compute 리소스 확인
+# compute 리소스가 부족하면 인스턴스는 만들어지지 않는다(중요).
+nova hypervisor-list
+nova hypervisor-show
+
+# 큰 파일 찾기(glance 이미지가 커서 등록이 안될 경우 있음)
+du -a /var | sort -n -r | head -n 10
+/var/lib/glance/images # controller
+/var/lib/nova/instances # compute
+
+# 인스턴스 테스트
+openstack --debug server create --flavor m1.window_miny --image win7_home --nic net-id=459ca71d-99a0-4794-beb1-d2b41041d4ab --security-group default --key-name mykey test
+
+# volume 추가할 때
+openstack volume create --size 30 nimojung_volume
+openstack server add volume nimojung_win7 nimojung_volume
+
+# OpenStack 상태보기
+openstack-status
+
+# 이미지 다운로드
+wget http://cloud.centos.org/centos/6.5/images/CentOS-6-x86_64-GenericCloud-20140929_01.qcow2
+wget http://cloud.centos.org/centos/6/images/CentOS-6-x86_64-GenericCloud.qcow2.xz
+wget http://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud.qcow2.xz
+wget https://dl.fedoraproject.org/pub/fedora/linux/releases/23/Cloud/i386/Images/Fedora-Cloud-Base-23-20151030.i386.qcow2
+wget https://dl.fedoraproject.org/pub/fedora/linux/releases/23/Cloud/x86_64/Images/Fedora-Cloud-Atomic-23-20151030.x86_64.qcow2
+wget https://dl.fedoraproject.org/pub/fedora/linux/releases/24/CloudImages/x86_64/images/Fedora-Cloud-Base-24-1.2.x86_64.qcow2
+wget https://cloud-images.ubuntu.com/trusty/current/trusty-server-cloudimg-amd64-disk1.img
+# 풀기
+unxz CentOS-6-x86_64-GenericCloud.qcow2.xz
+
+# 이미지 추가할 때
+openstack image create "centos7" --file /home/CentOS-7-x86_64-GenericCloud-1604.qcow2c --disk-format qcow2 --container-format bare --public
+openstack image create "centos6" --file /home/CentOS-6-x86_64-GenericCloud-1508.qcow2c --disk-format qcow2 --container-format bare --public
+openstack image create "fedora" --file /home/Fedora-Cloud-Base-23-20151030.x86_64.qcow2 --disk-format qcow2 --container-format bare --public
+openstack image create "ubuntu" --file t/home/rusty-server-cloudimg-amd64-disk1.img --disk-format qcow2 --container-format bare --public
+openstack image create "win2012" --file /home/windows_server_2012_r2_standard_eval_kvm_20151021.qcow2 --disk-format qcow2 --container-format bare --public
+openstack image create "win7" --file /home/win7.qcow2 --disk-format qcow2 --container-format bare --public
+
+# cloud-init(사용자 정의 데이터에 넣으면 된다)
+vi userdata.txt
+#cloud-config
+password: sniper
+chpasswd: { expire: False }
+ssh_pwauth: True
+
+#cloud-config
+root:sniper
+centos:sniper
+chpasswd:{ expire: False }
+ssh_pwauth:True
+
+#centos용, centos로 접속해서 sudo passwd로 root 패스워드 변경
+#cloud-config
+chpasswd:
+  list: |
+    centos:sniper123!@#
+  expire: False
+
+# ex
+openstack server create --flavor m1.small --image ubuntu --nic net-id=8491e645-303c-477c-b18b-68aef9b490b9 --security-group default --key-name mykey provider-instance --user-data=userdata.txt
+
+https://cloudbase.it/downloads/CloudbaseInitSetup_Stable_x86.msi
+https://cloudbase.it/downloads/CloudbaseInitSetup_Stable_x64.msi
+
+# 인스턴스에 볼륨 추가하기
+source demo-openrc.sh
+cinder list # volume id를 추출
+nova volume-attach test2(#instance name) volume_id /dev/vdb
+
+# mount(볼륨은 안지워진다)
+fdisk /dev/vdb
+mkfs.ext3 /dev/vdb
+mkdir /data
+mount /dev/vdb /data
+
+vi /etc/fstab
+/dev/vdb	/data	auto	defaults	1	2
+
+# img 확인
+ls -lh /var/lib/nova/instances/_base
+qemu-img info /var/lib/nova/instances/0debe180-ac32-49a4-9caa-5eebe834eef5/disk 
+virsh list
+virsh domblklist 12
