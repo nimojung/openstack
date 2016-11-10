@@ -1,0 +1,82 @@
+provider를 만들때, 명령어로 안하고 잘못 만들면
+네트워크 타입이 vxlan으로 만들어지는데.. 이렇게 되면 정상적인 동작(네트워크) 하지 않음
+flat 타입으로 되어야 함
+그래서 설치 명령어으로 만드는 것이 가장 안전함
+neutron net-create --shared --provider:physical_network provider --provider:network_type flat provider
+
+
+qemu-img info /openstack/images/CentOS-6-x86_64-GenericCloud.qcow2
+qemu-img info /openstack/images/CentOS-7-x86_64-GenericCloud.qcow2
+openstack image create "CentOS7" --file /openstack/images/CentOS-7-x86_64-GenericCloud.qcow2 --disk-format qcow2 --container-format bare --public
+openstack image create "CentOS6" --file /openstack/images/CentOS-6-x86_64-GenericCloud.qcow2 --disk-format qcow2 --container-format bare --public
+openstack image create "Fedora23_i386" --file /openstack/images/Fedora-Cloud-Base-23-20151030.i386.qcow2 --disk-format qcow2 --container-format bare --public
+openstack image create "Fedora23_x86_64" --file /openstack/images/Fedora-Cloud-Atomic-23-20151030.x86_64.qcow2 --disk-format qcow2 --container-format bare --public
+openstack image create "Fedora24" --file /openstack/images/Fedora-Cloud-Base-24-1.2.x86_64.qcow2 --disk-format qcow2 --container-format bare --public
+
+flavor에서 하드디스크가 모자라면...
+
+
+# centos 웹서비스 설치하기
+yum install -y httpd
+service httpd start
+yum install -y mysql-server
+service mysqld start
+mysql_secure_installation
+yum install -y php php-mysql
+chkconfig httpd on
+chkconfig mysqld on
+yum install -y epel-release
+yum install -y php-mbstring php-mcrypt
+
+#vi /var/www/html/info.php
+<?php
+phpinfo();
+?>
+
+service httpd restart
+
+# vi /etc/my.cnf
+datadir=/home/mysql
+# 변경 후, setenforce=0
+
+
+# insert password
+iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+iptables -I INPUT -p tcp --dport 3306 -j ACCEPT
+service iptables save
+
+#centos용, centos로 접속해서 sudo passwd로 root 패스워드 변경
+#cloud-config
+chpasswd:
+  list: |
+    centos:password
+  expire: False
+ 
+#아니면 그냥 key를 이용해서, centos로 바로 붙은 다음 패스워드를 변경해도 됨.
+# centos는 user가 centos임.
+
+
+# root 계정 활성화(접속)
+sudo passwd
+# sudo vi /etc/ssh/sshd_config
+PermitRootLogin yes 로 해주어야 바로 접근가능(키페어없이)
+# 하단 주석처리 또는 삭제
+#PasswordAuthentication no
+service sshd restart
+
+# Partition
+fdisk -l
+fdisk /dev/vda
+kpartx -f /dev/vda
+reboot
+fdisk -l
+mkfs.ext4 /dev/vda2
+mount /dev/vda2 /home
+vi /etc/fstab
+/dev/vda2	/home	ext4	defaults	0	0
+
+
+yum -y install partprobe (CentOS7)
+yum -y install parted (CentOS6)
+partprobe (kpartx -f /dev/vda)
